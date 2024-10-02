@@ -3,5 +3,5 @@
 md.ipynb, md.py
 Run MD simulations
 
-md_a0.ipynb
+md_an.ipynb
 Analyze simulation data
