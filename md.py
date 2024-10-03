@@ -3,12 +3,13 @@
 
 # # Molecular dynamics simulation
 
-# ### 1. Import dependencies
+# ### 1. Import modules
 
-# In[140]:
+# In[1]:
 
 
 import copy
+import sys
 from pathlib import Path
 import requests
 from IPython.display import display
@@ -28,19 +29,9 @@ from openff.toolkit.topology import Molecule, Topology
 from openmmforcefields.generators import GAFFTemplateGenerator
 
 
-# In[141]:
+# ### 2. Input Files
 
-
-# Simulation Options
-steps = 2e8                 ## 1e8= 200 ns
-write_interval = 1e4        ## 1e4 = 20 ps
-log_interval = 1e4          ## 1e4 = 20 ps
-
-
-# 
-# ### 2. Load PDB file
-
-# In[142]:
+# In[2]:
 
 
 # create data directory if not exists
@@ -53,13 +44,75 @@ print("PDB Path:")
 print(pdb_path)
 
 
+"""
+I plan to use the amber99sb-ildn force field for the protein, TIP3P for water molecules, 
+and the Joung-Cheatham (JC) model for ions. Since the "amber99sbildn.xml" file already includes ion parameters, 
+I have commented out the ion potentials (Na+ and Cl-, since I will use only them anyway) in this file to avoid conflicts. The JC parameters are provided in the "amber14/tip3p.xml" file.
+
+The path to the "amber99sbildn.xml" file on the cluster (under my account) is:
+/Users/jaeohshin/miniconda3/envs/md/lib/python3.12/site-packages/openmm/app/data/amber99sbildn.xml
+I have removed the parameters for Na+ and Cl- from "amber99sbildn.xml" to ensure that the system uses the ion parameters defined in 
+"amber14/tip3p.xml" (as of October 1st, 2024, by Jaeoh Shin).
+
+---
+Below is comment from OpenMM website for your infomation.
+The solvent model XML files included under the amber14/ directory include both water and ions compatible with that water model, 
+so if you mistakenly specify tip3p.xml instead of amber14/tip3p.xml, you run the risk of having ForceField throw an exception 
+since tip3p.xml will be missing parameters for ions in your system.
+---
+
+"""
+protein_ff="amber99sbildn.xml"
+solvent_ff="amber14/tip3p.xml"
+forcefield = app.ForceField(protein_ff, solvent_ff)
+
+
+# ### 3. System Configuration
+
+# In[3]:
+
+
+nonbondedMethod = app.PME
+rigidWater = True
+hydrogenMass = 2*unit.amu
+
+
+# Integration Options
+
+dt = 2.0 * unit.femtoseconds
+temperature = 300 * unit.kelvin
+friction = 1.0 / unit.picoseconds
+pressure = 1.0 * unit.atmosphere
+barostatInterval = 25 # default value
+
+
+# Simulation Options
+steps = 5e8                 ## 1e8= 200 ns, 1e6=2ns
+write_interval = 25000        ## 25,000 = 50 ps
+log_interval = 5e4          ## 5e4 = 100 ps
+equilibrationSteps = 1e5
+
+platform = mm.Platform.getPlatformByName('CUDA')
+platformProperties = {'Precision': 'mixed'}
+
+xtcReporter = md.reporters.XTCReporter(file=str(DATA / "trajectory_long.xtc"), reportInterval=write_interval)
+
+dataReporter= app.StateDataReporter(
+        sys.stdout, log_interval, step=True,
+        potentialEnergy=True, kineticEnergy=True, totalEnergy=True,
+        temperature=True, volume=True, density=True,
+        progress=True, remainingTime=True, speed=True,
+        totalSteps=steps, separator="\t"
+    )
+
+
 # ### 3. Prepare the protein
 
 # #### Protein preparation
 # 
 # A crucial part for successful simulation is a correct and complete system. Crystallographic structures retrieved from the Protein Data Bank often miss atoms, mainly hydrogens, and may contain non-standard residues. In this talktorial, we will use the Python package [PDBFixer](https://github.com/openmm/pdbfixer) to prepare the protein structure. However, co-crystallized ligands are not handled well by [PDBFixer](https://github.com/openmm/pdbfixer) and will thus be prepared separately.
 
-# In[143]:
+# In[4]:
 
 
 def prepare_protein(
@@ -111,14 +164,12 @@ def prepare_protein(
     return fixer
 
 
-# In[144]:
+# In[5]:
 
 
 # prepare protein and build only missing non-terminal residues
 prepared_protein = prepare_protein(pdb_path, ignore_missing_residues=False)
 
-
-# ### Check what has changed after fixing
 
 # ### 4. Merge protein and ligand
 # 
@@ -126,7 +177,7 @@ prepared_protein = prepare_protein(pdb_path, ignore_missing_residues=False)
 
 # Now protein and ligand are both in [OpenMM](https://github.com/openmm/openmm) like formats and can be merged with [MDTraj](https://github.com/mdtraj/mdtraj).
 
-# In[145]:
+# In[6]:
 
 
 def merge_protein(protein):
@@ -163,71 +214,17 @@ def merge_protein(protein):
     return complex_topology, complex_positions
 
 
-# In[146]:
+# In[7]:
 
 
 complex_topology, complex_positions = merge_protein(prepared_protein)
 
 
-# In[147]:
+# In[8]:
 
 
 print("Complex topology has", complex_topology.getNumAtoms(), "atoms.")
 # NBVAL_CHECK_OUTPUT
-
-
-# ### 5. MD simulation set up
-# 
-# 
-
-# #### Force field
-# 
-# Common force fields like AMBER have parameters for amino acids, nucleic acids, water and ions and usually offer several options to choose from depending on your aim. We use the `amber99sbildn.xml` force field file. For solvation we use the standard three-site [water model](https://en.wikipedia.org/wiki/Water_model) [**TIP3P**](https://aip.scitation.org/doi/10.1063/1.445869).
-
-# In[148]:
-
-
-"""
-I plan to use the amber99sb-ildn force field for the protein, TIP3P for water molecules, 
-and the Joung-Cheatham (JC) model for ions. Since the "amber99sbildn.xml" file already includes ion parameters, 
-I have commented out the ion potentials in this file to avoid conflicts. The JC parameters are already provided in the "amber14/tip3p.xml" file.
-
-The path to the "amber99sbildn.xml" file on the cluster (under my account) is:
-/Users/jaeohshin/miniconda3/envs/md/lib/python3.12/site-packages/openmm/app/data/amber99sbildn.xml
-I have removed the parameters for Na+ and Cl- from "amber99sbildn.xml" to ensure that the system uses the ion parameters defined in 
-"amber14/tip3p.xml" (as of October 1st, 2024, by Jaeoh Shin).
-
----
-Below is comment from OpenMM website for your infomation.
-The solvent model XML files included under the amber14/ directory include both water and ions compatible with that water model, 
-so if you mistakenly specify tip3p.xml instead of amber14/tip3p.xml, you run the risk of having ForceField throw an exception 
-since tip3p.xml will be missing parameters for ions in your system.
----
-
-"""
-protein_ff="amber99sbildn.xml"
-solvent_ff="amber14/tip3p.xml"
-forcefield = app.ForceField(protein_ff, solvent_ff)
-
-
-# ### 6. Define the parameters
-
-# In[149]:
-
-
-# Integration Options
-dt = 2.0 * unit.femtoseconds
-temperature = 300 * unit.kelvin
-friction = 1.0 / unit.picoseconds
-pressure = 1.0 * unit.atmosphere
-barostatInterval = 25 # default value
-
-
-
-
-#platform = mm.Platform.getPlatformByName('CUDA')
-#platformProperties = {'Precision': 'mixed'}
-hydrogenMass = 1.5*unit.amu
 
 
 # ### 7. System setup
@@ -236,74 +233,55 @@ hydrogenMass = 1.5*unit.amu
 # 
 # > Note this step can take a long time, in the order of minutes, depending on your hardware.
 
-# In[150]:
+# In[9]:
 
 
 modeller = app.Modeller(complex_topology, complex_positions)
 modeller.addSolvent(forcefield, padding=1.0 * unit.nanometers, boxShape='dodecahedron', ionicStrength=0.15 * unit.molar)
 
+## Save the output file for the peace of mind
 print('Save the output file...')
-output_file = 'protein_with_solvent2.pdb'
+output_file = 'protein_with_solvent.pdb'
 with open(output_file, 'w') as f:
     app.PDBFile.writeFile(modeller.getTopology(), modeller.getPositions(), f)
 
 
+# ### Building system
 # With our solvated system and force field, we can finally create an [OpenMM System](http://docs.openmm.org/development/api-python/generated/openmm.openmm.System.html#openmm.openmm.System) and set up the simulation.
 # Additionally to the system the simulation needs an integrator. An [OpenMM Integrator](http://docs.openmm.org/development/api-python/library.html#integrators) defines a method for simulating a system by integrating the equations of motion. The chosen **Langevin Integrator** uses Langevin equations. A list of all different kinds of integrators can be found in the [OpenMM Docs](http://docs.openmm.org/development/api-python/library.html#integrators). For further insight into the **Langevin Integrator**, we recommend reading about Langevin equations, e.g. on [Wikipedia](https://en.wikipedia.org/wiki/Langevin_equation).
 
-# In[151]:
+# In[10]:
 
 
 print('Building system...')
 
+system = forcefield.createSystem(modeller.topology, nonbondedMethod=nonbondedMethod, rigidWater=rigidWater, hydrogenMass=hydrogenMass)
+system.addForce(mm.MonteCarloBarostat(pressure,temperature, barostatInterval))
 
-system = forcefield.createSystem(modeller.topology, nonbondedMethod=app.PME)
 integrator = mm.LangevinMiddleIntegrator(temperature, friction, dt)
-simulation = app.Simulation(modeller.topology, system, integrator)
+simulation = app.Simulation(modeller.topology, system, integrator, platform, platformProperties)
 simulation.context.setPositions(modeller.positions)
 
 
-# ### 8. Minimize energy
+# ### 8. Minimize and Equilibrate
 # Now that everything is set up, we can perform the simulation. We need to set starting positions and minimize the energy of the system to get a low energy starting configuration, which is important to decrease the chance of simulation failures due to severe atom clashes. The energy minimized system is saved.
 
-# In[152]:
+# In[11]:
 
 
 print("Minimizing energy...")
 simulation.minimizeEnergy()
 
-#simulation.minimizeEnergy(tolerance=10.0 * unit.kilojoule_per_mole/unit.nanometer, maxIterations=1000)
+print("Equilibrating...")
+simulation.context.setVelocitiesToTemperature(temperature)
+simulation.step(equilibrationSteps)
 
 
-# ### 9. Equilibration: NVT
-
-# ### NPT equilibration
-
-# In[153]:
+# In[12]:
 
 
-system.addForce(mm.MonteCarloBarostat(pressure,temperature, barostatInterval))
-simulation.context.reinitialize(preserveState=True)
-print("Running NPT ...")
-simulation.step(10000)
-
-
-# In[154]:
-
-
-# Create a filtered topology excluding water molecules
-"""
-filtered_topology = mm.app.Topology()
-filtered_topology.setPeriodicBoxVectors(simulation.topology.getPeriodicBoxVectors())
-
-# Copy over only non-water chains/residues
-filtered_topology = simulation.topology.toPDBTopology(lambda res: res.name not in ["HOH", "WAT", "TIP3"])
-
-###
-"""
-
-
-with open(DATA / "topology_temp.pdb", "w") as pdb_file:
+# Create a filtered topology 
+with open(DATA / "topology_long.pdb", "w") as pdb_file:
     app.PDBFile.writeFile(
         simulation.topology,
         simulation.context.getState(getPositions=True, enforcePeriodicBox=True).getPositions(),
@@ -312,49 +290,14 @@ with open(DATA / "topology_temp.pdb", "w") as pdb_file:
     )
 
 
-# ### Once the minimization has finished, we can perform the MD simulation. 
+# #### Simulating
 
-# In[155]:
-
-
-import sys
-
-# output settings
-simulation.reporters.append(
-    md.reporters.XTCReporter(file=str(DATA / "trajectory_temp.xtc"), reportInterval=write_interval)
-)
-simulation.reporters.append(
-    app.StateDataReporter(
-        sys.stdout,
-        log_interval,
-        step=True,
-        potentialEnergy=True,
-        temperature=True,
-        progress=True,
-        remainingTime=True,
-        speed=True,
-        totalSteps=steps,
-        separator="\t",
-    )
-)
+# In[13]:
 
 
-# The velocities for all particles in the system are randomly chosen from a distribution at the given temperature. We chose 300 Kelvin, which is some degrees above room temperature.
-# A random seed is generated, but could be explicitly given to reproduce results.
-# 
-# Then the simulation is performed by taking the steps defined before.
-
-# In[156]:
-
-
-simulation.context.setVelocitiesToTemperature(temperature)
-simulation.step(steps)  # perform the simulation
-
-
-# In[55]:
-
-
-# Check the trajectory exists and is not empty
-(DATA / "trajectory.xtc").stat().st_size > 0
-# NBVAL_CHECK_OUTPUT
+print('Simulating...')
+simulation.reporters.append(xtcReporter)
+simulation.reporters.append(dataReporter)
+simulation.currentStep = 0
+simulation.step(steps)
 
