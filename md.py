@@ -87,7 +87,7 @@ barostatInterval = 25 # default value
 
 
 # Simulation Options
-steps = 5e8                 ## 1e8= 200 ns, 1e6=2ns
+steps = 1e5 #5e8                 ## 1e8= 200 ns, 1e6=2ns
 write_interval = 25000        ## 25,000 = 50 ps
 log_interval = 5e4          ## 5e4 = 100 ps
 equilibrationSteps = 1e5
@@ -95,11 +95,11 @@ equilibrationSteps = 1e5
 platform = mm.Platform.getPlatformByName('CUDA')
 platformProperties = {'Precision': 'mixed'}
 
-xtcReporter = md.reporters.XTCReporter(file=str(DATA / "trajectory_long.xtc"), reportInterval=write_interval)
+
 
 dataReporter= app.StateDataReporter(
         sys.stdout, log_interval, step=True,
-        potentialEnergy=True, kineticEnergy=True, totalEnergy=True,
+        potentialEnergy=True, kineticEnergy=True, 
         temperature=True, volume=True, density=True,
         progress=True, remainingTime=True, speed=True,
         totalSteps=steps, separator="\t"
@@ -224,7 +224,6 @@ complex_topology, complex_positions = merge_protein(prepared_protein)
 
 
 print("Complex topology has", complex_topology.getNumAtoms(), "atoms.")
-# NBVAL_CHECK_OUTPUT
 
 
 # ### 7. System setup
@@ -238,12 +237,6 @@ print("Complex topology has", complex_topology.getNumAtoms(), "atoms.")
 
 modeller = app.Modeller(complex_topology, complex_positions)
 modeller.addSolvent(forcefield, padding=1.0 * unit.nanometers, boxShape='dodecahedron', ionicStrength=0.15 * unit.molar)
-
-## Save the output file for the peace of mind
-print('Save the output file...')
-output_file = 'protein_with_solvent.pdb'
-with open(output_file, 'w') as f:
-    app.PDBFile.writeFile(modeller.getTopology(), modeller.getPositions(), f)
 
 
 # ### Building system
@@ -280,19 +273,90 @@ simulation.step(equilibrationSteps)
 # In[12]:
 
 
+#pdb = ap.PDBFile(pdb_)file)
+#print(simulation.topology)
+#print(type(simulation))
+protein_atom_indices = []
+
+for atom in simulation.topology.atoms():
+    # Check if the atom belongs to a protein residue
+    if atom.residue.name not in ['HOH', 'NA', 'CL']:  # Exclude common non-protein residues
+    #if False:
+    #if atom.atom.name in ['ATOM']:  # Exclude common non-protein residues
+        protein_atom_indices.append(atom.index)
+
+
+# In[13]:
+
+
+print(len(protein_atom_indices))
+
+
+# In[14]:
+
+
+# Energy minimized system is saved.
+
+with open(DATA / "top.pdb", "w") as pdb_file:
+    #positions = simulation.context.getState(getPositions=True, enforcePeriodicBox=True).getPositions(protein_atom_indices)
+    positions = simulation.context.getState(getPositions=True, enforcePeriodicBox=True).getPositions()
+    app.PDBFile.writeFile(simulation.topology, positions=positions, file=pdb_file, keepIds=True)
+
+
+# In[15]:
+
+
+# Save only protein system
+traj = md.load(DATA / "top.pdb")
+protein_atoms = traj.topology.select("protein")
+protein_traj = traj.atom_slice(protein_atoms)
+protein_traj.save_pdb(DATA / "top_protein.pdb")
+
+
+# In[ ]:
+
+
+
+
+
+# In[16]:
+
+
 # Create a filtered topology 
-with open(DATA / "topology_long.pdb", "w") as pdb_file:
+"""
+with open(DATA / "topology_subset.pdb", "w") as pdb_file:
+    state = simulation.context.getState(getPositions=True, enforcePeriodicBox=True)
     app.PDBFile.writeFile(
         simulation.topology,
-        simulation.context.getState(getPositions=True, enforcePeriodicBox=True).getPositions(),
+        state.getPositions(protein_atom_indices),
         file=pdb_file,
         keepIds=True,
     )
+"""
+
+
+# In[17]:
+
+
+xtcReporter = md.reporters.XTCReporter(file=str(DATA / "traj_protein.xtc"), 
+                                       reportInterval=write_interval, atomSubset=protein_atoms)
+
+
+# In[18]:
+
+
+print(len(protein_atom_indices))
+
+
+# In[19]:
+
+
+pwd
 
 
 # #### Simulating
 
-# In[13]:
+# In[20]:
 
 
 print('Simulating...')
