@@ -3,14 +3,18 @@
 
 # # Molecular dynamics simulation
 
+# python md.py /path/to/directory cutoff_protein.pdb
+
 # ### 1. Import modules
 
-# In[1]:
+# In[47]:
 
 
 import copy
 import sys
+import argparse
 from pathlib import Path
+
 import requests
 from IPython.display import display
 
@@ -31,17 +35,30 @@ from openmmforcefields.generators import GAFFTemplateGenerator
 
 # ### 2. Input Files
 
-# In[2]:
+# In[46]:
 
 
-# create data directory if not exists
-#HERE = Path(_dh[-1])
-HERE = Path.cwd()
-DATA = HERE / "test"
-pdb_path = DATA / "cutoff_protein.pdb"
+# Set up argument parser
+parser = argparse.ArgumentParser(description="Process a directory and PDB file name.")
+parser.add_argument("directory", type=str, help="Directory path")
+parser.add_argument("filename", type=str, help="PDB file name")
 
+# Parse the arguments
+args = parser.parse_args()
+
+# Create the path
+HERE = Path(args.directory)
+DATA = HERE
+pdb_path = HERE / args.filename
+
+# Print the resulting PDB path
 print("PDB Path:")
 print(pdb_path)
+
+
+# ### Force field
+
+# In[ ]:
 
 
 """
@@ -69,12 +86,14 @@ forcefield = app.ForceField(protein_ff, solvent_ff)
 
 # ### 3. System Configuration
 
-# In[3]:
+# In[23]:
 
+
+# Water, hydrogen mass, PME options
 
 nonbondedMethod = app.PME
 rigidWater = True
-hydrogenMass = 2*unit.amu
+#hydrogenMass = 2*unit.amu
 
 
 # Integration Options
@@ -87,14 +106,15 @@ barostatInterval = 25 # default value
 
 
 # Simulation Options
-steps = 1e5 #5e8                 ## 1e8= 200 ns, 1e6=2ns
-write_interval = 25000        ## 25,000 = 50 ps
-log_interval = 5e4          ## 5e4 = 100 ps
-equilibrationSteps = 1e5
+steps = 5e9                 ## 1e8= 200 ns, 1e6=2ns
+write_interval = 50000        ## 25,000 = 50 ps --> for 1us run, there will be 20,000 frames
+
+equilibrationSteps = 1e5    ## 1e5 = 0.2 ns.
+log_interval = 5e5
+
 
 platform = mm.Platform.getPlatformByName('CUDA')
 platformProperties = {'Precision': 'mixed'}
-
 
 
 dataReporter= app.StateDataReporter(
@@ -112,7 +132,7 @@ dataReporter= app.StateDataReporter(
 # 
 # A crucial part for successful simulation is a correct and complete system. Crystallographic structures retrieved from the Protein Data Bank often miss atoms, mainly hydrogens, and may contain non-standard residues. In this talktorial, we will use the Python package [PDBFixer](https://github.com/openmm/pdbfixer) to prepare the protein structure. However, co-crystallized ligands are not handled well by [PDBFixer](https://github.com/openmm/pdbfixer) and will thus be prepared separately.
 
-# In[4]:
+# In[24]:
 
 
 def prepare_protein(
@@ -164,7 +184,7 @@ def prepare_protein(
     return fixer
 
 
-# In[5]:
+# In[25]:
 
 
 # prepare protein and build only missing non-terminal residues
@@ -177,7 +197,7 @@ prepared_protein = prepare_protein(pdb_path, ignore_missing_residues=False)
 
 # Now protein and ligand are both in [OpenMM](https://github.com/openmm/openmm) like formats and can be merged with [MDTraj](https://github.com/mdtraj/mdtraj).
 
-# In[6]:
+# In[26]:
 
 
 def merge_protein(protein):
@@ -214,13 +234,13 @@ def merge_protein(protein):
     return complex_topology, complex_positions
 
 
-# In[7]:
+# In[27]:
 
 
 complex_topology, complex_positions = merge_protein(prepared_protein)
 
 
-# In[8]:
+# In[28]:
 
 
 print("Complex topology has", complex_topology.getNumAtoms(), "atoms.")
@@ -232,7 +252,7 @@ print("Complex topology has", complex_topology.getNumAtoms(), "atoms.")
 # 
 # > Note this step can take a long time, in the order of minutes, depending on your hardware.
 
-# In[9]:
+# In[29]:
 
 
 modeller = app.Modeller(complex_topology, complex_positions)
@@ -243,23 +263,24 @@ modeller.addSolvent(forcefield, padding=1.0 * unit.nanometers, boxShape='dodecah
 # With our solvated system and force field, we can finally create an [OpenMM System](http://docs.openmm.org/development/api-python/generated/openmm.openmm.System.html#openmm.openmm.System) and set up the simulation.
 # Additionally to the system the simulation needs an integrator. An [OpenMM Integrator](http://docs.openmm.org/development/api-python/library.html#integrators) defines a method for simulating a system by integrating the equations of motion. The chosen **Langevin Integrator** uses Langevin equations. A list of all different kinds of integrators can be found in the [OpenMM Docs](http://docs.openmm.org/development/api-python/library.html#integrators). For further insight into the **Langevin Integrator**, we recommend reading about Langevin equations, e.g. on [Wikipedia](https://en.wikipedia.org/wiki/Langevin_equation).
 
-# In[10]:
+# In[30]:
 
 
 print('Building system...')
 
-system = forcefield.createSystem(modeller.topology, nonbondedMethod=nonbondedMethod, rigidWater=rigidWater, hydrogenMass=hydrogenMass)
+system = forcefield.createSystem(modeller.topology, nonbondedMethod=nonbondedMethod, rigidWater=rigidWater)
 system.addForce(mm.MonteCarloBarostat(pressure,temperature, barostatInterval))
 
 integrator = mm.LangevinMiddleIntegrator(temperature, friction, dt)
 simulation = app.Simulation(modeller.topology, system, integrator, platform, platformProperties)
 simulation.context.setPositions(modeller.positions)
+simulation.context.reinitialize(True)
 
 
 # ### 8. Minimize and Equilibrate
 # Now that everything is set up, we can perform the simulation. We need to set starting positions and minimize the energy of the system to get a low energy starting configuration, which is important to decrease the chance of simulation failures due to severe atom clashes. The energy minimized system is saved.
 
-# In[11]:
+# In[31]:
 
 
 print("Minimizing energy...")
@@ -270,40 +291,17 @@ simulation.context.setVelocitiesToTemperature(temperature)
 simulation.step(equilibrationSteps)
 
 
-# In[12]:
-
-
-#pdb = ap.PDBFile(pdb_)file)
-#print(simulation.topology)
-#print(type(simulation))
-protein_atom_indices = []
-
-for atom in simulation.topology.atoms():
-    # Check if the atom belongs to a protein residue
-    if atom.residue.name not in ['HOH', 'NA', 'CL']:  # Exclude common non-protein residues
-    #if False:
-    #if atom.atom.name in ['ATOM']:  # Exclude common non-protein residues
-        protein_atom_indices.append(atom.index)
-
-
-# In[13]:
-
-
-print(len(protein_atom_indices))
-
-
-# In[14]:
+# In[34]:
 
 
 # Energy minimized system is saved.
 
 with open(DATA / "top.pdb", "w") as pdb_file:
-    #positions = simulation.context.getState(getPositions=True, enforcePeriodicBox=True).getPositions(protein_atom_indices)
     positions = simulation.context.getState(getPositions=True, enforcePeriodicBox=True).getPositions()
     app.PDBFile.writeFile(simulation.topology, positions=positions, file=pdb_file, keepIds=True)
 
 
-# In[15]:
+# In[35]:
 
 
 # Save only protein system
@@ -313,50 +311,16 @@ protein_traj = traj.atom_slice(protein_atoms)
 protein_traj.save_pdb(DATA / "top_protein.pdb")
 
 
-# In[ ]:
-
-
-
-
-
-# In[16]:
-
-
-# Create a filtered topology 
-"""
-with open(DATA / "topology_subset.pdb", "w") as pdb_file:
-    state = simulation.context.getState(getPositions=True, enforcePeriodicBox=True)
-    app.PDBFile.writeFile(
-        simulation.topology,
-        state.getPositions(protein_atom_indices),
-        file=pdb_file,
-        keepIds=True,
-    )
-"""
-
-
-# In[17]:
+# In[37]:
 
 
 xtcReporter = md.reporters.XTCReporter(file=str(DATA / "traj_protein.xtc"), 
                                        reportInterval=write_interval, atomSubset=protein_atoms)
 
 
-# In[18]:
-
-
-print(len(protein_atom_indices))
-
-
-# In[19]:
-
-
-pwd
-
-
 # #### Simulating
 
-# In[20]:
+# In[40]:
 
 
 print('Simulating...')
@@ -364,4 +328,6 @@ simulation.reporters.append(xtcReporter)
 simulation.reporters.append(dataReporter)
 simulation.currentStep = 0
 simulation.step(steps)
+
+
 
