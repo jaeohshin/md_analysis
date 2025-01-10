@@ -42,7 +42,7 @@ def main1(base_path, prefix='rank', cut=50.0):
 
     print('  Clustering...')
     # AC dist_threshold --> 50.0
-    clustering = AgglomerativeClustering(n_clusters=None, affinity='euclidean',
+    clustering = AgglomerativeClustering(n_clusters=None, metric='euclidean',
                                          compute_full_tree=True,
                                          distance_threshold=cut).fit(dist_mat)
     centers = []
