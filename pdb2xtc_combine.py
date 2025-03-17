@@ -19,6 +19,9 @@ for pdb_file in pdb_files[1:]:
     try:
         # Try to load with the reference topology
         traj = md.load(pdb_file, top=ref_topology)
+        ca_indices = ref_topology.select('backbone')
+        traj.superpose(reference, atom_indices=ca_indices)
+
         all_coords.append(traj.xyz)
     except Exception as e:
         print(f"Skipping {pdb_file}: {e}")
